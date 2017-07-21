@@ -20,10 +20,12 @@ import javax.annotation.Nullable;
 import java.util.AbstractQueue;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
@@ -67,6 +69,20 @@ import org.slf4j.LoggerFactory;
 @XStreamAlias("applications")
 @JsonRootName("applications")
 public class Applications {
+    private static class VipIndexSupport {
+        AbstractQueue<InstanceInfo> instances = new ConcurrentLinkedQueue<>();
+        AtomicLong roundRobinIndex = new AtomicLong(0);
+        AtomicReference<List<InstanceInfo>> vipList = new AtomicReference<List<InstanceInfo>>(Collections.emptyList());
+        public AbstractQueue<InstanceInfo> getInstances() {
+            return instances;
+        }
+        public AtomicLong getRoundRobinIndex() {
+            return roundRobinIndex;
+        }
+        public AtomicReference<List<InstanceInfo>> getVipList() {
+            return vipList;
+        }
+    }
     private static final String APP_INSTANCEID_DELIMITER = "$$";
     private static final Logger logger = LoggerFactory.getLogger(Applications.class);
     private static final String STATUS_DELIMITER = "_";
@@ -77,13 +93,8 @@ public class Applications {
     private final AbstractQueue<Application> applications;
 
     private Map<String, Application> appNameApplicationMap = new ConcurrentHashMap<String, Application>();
-    private Map<String, AbstractQueue<InstanceInfo>> virtualHostNameAppMap = new ConcurrentHashMap<String, AbstractQueue<InstanceInfo>>();
-    private Map<String, AbstractQueue<InstanceInfo>> secureVirtualHostNameAppMap = new ConcurrentHashMap<String, AbstractQueue<InstanceInfo>>();
-    private Map<String, AtomicLong> virtualHostNameIndexMap = new ConcurrentHashMap<String, AtomicLong>();
-    private Map<String, AtomicLong> secureVirtualHostNameIndexMap = new ConcurrentHashMap<String, AtomicLong>();
-
-    private Map<String, AtomicReference<List<InstanceInfo>>> shuffleVirtualHostNameMap = new ConcurrentHashMap<String, AtomicReference<List<InstanceInfo>>>();
-    private Map<String, AtomicReference<List<InstanceInfo>>> shuffledSecureVirtualHostNameMap = new ConcurrentHashMap<String, AtomicReference<List<InstanceInfo>>>();
+    private Map<String, VipIndexSupport> virtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
+    private Map<String, VipIndexSupport> secureVirtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
 
     private String appsHashCode;
 
@@ -129,7 +140,7 @@ public class Applications {
      */
     public void addApplication(Application app) {
         appNameApplicationMap.put(app.getName().toUpperCase(Locale.ROOT), app);
-        addInstancesToVIPMaps(app);
+        addInstancesToVIPMaps(app, this.virtualHostNameAppMap, this.secureVirtualHostNameAppMap);
         applications.add(app);
     }
 
@@ -166,12 +177,12 @@ public class Applications {
      * @return list of <em>instances</em>.
      */
     public List<InstanceInfo> getInstancesByVirtualHostName(String virtualHostName) {
-        AtomicReference<List<InstanceInfo>> ref = this.shuffleVirtualHostNameMap
+        VipIndexSupport ref = this.virtualHostNameAppMap
                 .get(virtualHostName.toUpperCase(Locale.ROOT));
-        if (ref == null || ref.get() == null) {
+        if (ref == null || ref.vipList.get() == null) {
             return new ArrayList<InstanceInfo>();
         } else {
-            return ref.get();
+            return ref.vipList.get();
         }
     }
 
@@ -185,12 +196,12 @@ public class Applications {
      * @return list of <em>instances</em>.
      */
     public List<InstanceInfo> getInstancesBySecureVirtualHostName(String secureVirtualHostName) {
-        AtomicReference<List<InstanceInfo>> ref = this.shuffledSecureVirtualHostNameMap
+        VipIndexSupport ref = this.secureVirtualHostNameAppMap
                 .get(secureVirtualHostName.toUpperCase(Locale.ROOT));
-        if (ref == null || ref.get() == null) {
+        if (ref == null || ref.vipList.get() == null) {
             return new ArrayList<InstanceInfo>();
         } else {
-            return ref.get();
+            return ref.vipList.get();
         }
     }
 
@@ -429,22 +440,23 @@ public class Applications {
                                   @Nullable Map<String, Applications> remoteRegionsRegistry,
                                   @Nullable EurekaClientConfig clientConfig,
                                   @Nullable InstanceRegionChecker instanceRegionChecker) {
-        this.virtualHostNameAppMap.clear();
-        this.secureVirtualHostNameAppMap.clear();
+        Map<String, VipIndexSupport> secureVirtualHostNameAppMap = new HashMap<>();
+        Map<String, VipIndexSupport> virtualHostNameAppMap = new HashMap<>();
         for (Application application : appNameApplicationMap.values()) {
             if (indexByRemoteRegions) {
                 application.shuffleAndStoreInstances(remoteRegionsRegistry, clientConfig, instanceRegionChecker);
             } else {
                 application.shuffleAndStoreInstances(filterUpInstances);
             }
-            this.addInstancesToVIPMaps(application);
+            this.addInstancesToVIPMaps(application, virtualHostNameAppMap, secureVirtualHostNameAppMap);
         }
-        shuffleAndFilterInstances(this.virtualHostNameAppMap,
-                this.shuffleVirtualHostNameMap, virtualHostNameIndexMap,
-                filterUpInstances);
-        shuffleAndFilterInstances(this.secureVirtualHostNameAppMap,
-                this.shuffledSecureVirtualHostNameMap,
-                secureVirtualHostNameIndexMap, filterUpInstances);
+        shuffleAndFilterInstances(virtualHostNameAppMap, filterUpInstances);
+        shuffleAndFilterInstances(secureVirtualHostNameAppMap, filterUpInstances);
+        
+        this.virtualHostNameAppMap.putAll(virtualHostNameAppMap);
+        this.virtualHostNameAppMap.keySet().retainAll(virtualHostNameAppMap.keySet());
+        this.secureVirtualHostNameAppMap.putAll(virtualHostNameAppMap);
+        this.secureVirtualHostNameAppMap.keySet().retainAll(secureVirtualHostNameAppMap.keySet());
     }
 
     /**
@@ -460,9 +472,9 @@ public class Applications {
      */
     public AtomicLong getNextIndex(String virtualHostname, boolean secure) {
         if (secure) {
-            return this.secureVirtualHostNameIndexMap.get(virtualHostname);
+            return Optional.ofNullable(this.secureVirtualHostNameAppMap.get(virtualHostname)).map(VipIndexSupport::getRoundRobinIndex).orElse(null);
         } else {
-            return this.virtualHostNameIndexMap.get(virtualHostname);
+            return Optional.ofNullable(this.virtualHostNameAppMap.get(virtualHostname)).map(VipIndexSupport::getRoundRobinIndex).orElse(null);
         }
     }
 
@@ -472,35 +484,25 @@ public class Applications {
      *
      */
     private void shuffleAndFilterInstances(
-            Map<String, AbstractQueue<InstanceInfo>> srcMap,
-            Map<String, AtomicReference<List<InstanceInfo>>> destMap,
-            Map<String, AtomicLong> vipIndexMap, boolean filterUpInstances) {
+            Map<String, VipIndexSupport> srcMap, boolean filterUpInstances) {
         
         Random shuffleRandom = new Random();
-        for (Map.Entry<String, AbstractQueue<InstanceInfo>> entries : srcMap.entrySet()) {
-            AbstractQueue<InstanceInfo> instanceInfoQueue = entries.getValue();            
+        for (Map.Entry<String, VipIndexSupport> entries : srcMap.entrySet()) {
+            VipIndexSupport vipIndexSupport = entries.getValue();
+            AbstractQueue<InstanceInfo> vipInstances = vipIndexSupport.instances;            
             final List<InstanceInfo> l;
             if (filterUpInstances) {
-               l = instanceInfoQueue.stream()
+               l = vipInstances.stream()
                        .filter(ii -> ii.getStatus() == InstanceStatus.UP)
-                       .collect(Collectors.toCollection(()->new ArrayList<>(instanceInfoQueue.size())));
+                       .collect(Collectors.toCollection(()->new ArrayList<>(vipInstances.size())));
             }
             else {
-               l = new ArrayList<InstanceInfo>(instanceInfoQueue);
+               l = new ArrayList<InstanceInfo>(vipInstances);
             }            
-            Collections.shuffle(l, shuffleRandom);
-            
-            String entryKey = entries.getKey();
-            AtomicReference<List<InstanceInfo>> instanceInfoList = destMap.computeIfAbsent(
-                    entryKey, key -> new AtomicReference<List<InstanceInfo>>(l));
-            instanceInfoList.set(l);
-            vipIndexMap.put(entryKey, new AtomicLong(0));
+            Collections.shuffle(l, shuffleRandom);            
+            vipIndexSupport.vipList.set(l);
+            vipIndexSupport.roundRobinIndex.set(0);
         }
-
-        // finally remove all vips that are completed deleted (i.e. missing) from the srcSet
-        Set<String> srcVips = srcMap.keySet();
-        Set<String> destVips = destMap.keySet();
-        destVips.retainAll(srcVips);
     }
 
     /**
@@ -510,12 +512,12 @@ public class Applications {
      *
      */
     private void addInstanceToMap(InstanceInfo info, String vipAddresses,
-                                  Map<String, AbstractQueue<InstanceInfo>> vipMap) {
+                                  Map<String, VipIndexSupport> vipMap) {
         if (vipAddresses != null) {
             String[] vipAddressArray = vipAddresses.toUpperCase(Locale.ROOT).split(",");
             for (String vipAddress : vipAddressArray) {
-                AbstractQueue<InstanceInfo> instanceInfoList = vipMap.computeIfAbsent(vipAddress, k->new ConcurrentLinkedQueue<>());
-                instanceInfoList.add(info);
+                VipIndexSupport vis = vipMap.computeIfAbsent(vipAddress, k->new VipIndexSupport());
+                vis.instances.add(info);
             }
         }
     }
@@ -524,7 +526,7 @@ public class Applications {
      * Adds the instances to the internal vip address map.
      * @param app - the applications for which the instances need to be added.
      */
-    private void addInstancesToVIPMaps(Application app) {
+    private void addInstancesToVIPMaps(Application app, Map<String, VipIndexSupport> virtualHostNameAppMap,  Map<String, VipIndexSupport> secureVirtualHostNameAppMap) {
         // Check and add the instances to the their respective virtual host name
         // mappings
         for (InstanceInfo info : app.getInstances()) {
@@ -534,8 +536,7 @@ public class Applications {
                 continue;
             }
             addInstanceToMap(info, vipAddresses, virtualHostNameAppMap);
-            addInstanceToMap(info, secureVipAddresses,
-                    secureVirtualHostNameAppMap);
+            addInstanceToMap(info, secureVipAddresses, secureVirtualHostNameAppMap);
         }
     }
 

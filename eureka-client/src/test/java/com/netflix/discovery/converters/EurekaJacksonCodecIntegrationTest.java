@@ -24,7 +24,7 @@ import com.netflix.discovery.shared.Applications;
  * tests below are @Ignore'd.
  *
  */
-@Ignore
+//@Ignore
 public class EurekaJacksonCodecIntegrationTest {
     private static final int UNREASONABLE_TIMEOUT_MS = 500;
     private final EurekaJacksonCodec codec = new EurekaJacksonCodec("", "");
@@ -37,16 +37,27 @@ public class EurekaJacksonCodecIntegrationTest {
     @Test
     public void testRealDecode() throws Exception {
         Applications applications;
-        File localDiscovery = downloadRegistration(System.getProperty("discovery.url"));
-        for (int i = 0; i < 10000; i++) {
+        File localDiscovery = new File("/var/folders/6j/qy6n1npj11x5j2j_9ng2wzmw0000gp/T/discovery-data-6054758555577530004.json"); //downloadRegistration(System.getProperty("discovery.url"));
+        long testStart = System.currentTimeMillis();
+        for (int i = 0; i < 60; i++) {
             try (InputStream is = new FileInputStream(localDiscovery)) {
                 long start = System.currentTimeMillis();
                 applications = codec.readValue(Applications.class, is);
                 System.out.println("found some applications: " + applications.getRegisteredApplications().size()
                         + " et: " + (System.currentTimeMillis() - start));
             }
-            Thread.sleep(3000);
         }
+        System.out.println("test time: " 
+                + " et: " + (System.currentTimeMillis() - testStart));
+    }
+    
+    
+    @Test
+    public void testCuriosity() {
+        char[] arr1 = "test".toCharArray();
+        char[] arr2 = new char[] {'t', 'e', 's', 't'};
+        
+        System.out.println("array equals" + arr1.equals(arr2));
     }
 
     /**

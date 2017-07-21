@@ -17,13 +17,8 @@
 package com.netflix.discovery.converters.jackson.builder;
 
 import java.io.IOException;
-import java.lang.reflect.Type;
-import java.nio.CharBuffer;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
-import java.util.function.Function;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -32,9 +27,12 @@ import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.netflix.appinfo.AmazonInfo;
 import com.netflix.appinfo.AmazonInfo.MetaDataKey;
 import com.netflix.appinfo.DataCenterInfo.Name;
+import com.netflix.discovery.converters.EnumLookup;
 import com.netflix.discovery.util.DeserializerStringCache;
 import com.netflix.discovery.util.DeserializerStringCache.CacheScope;
 import com.netflix.discovery.util.StringCache;
+
+import vlsi.utils.CompactHashMap;
 
 /**
  * Amazon instance info builder that is doing key names interning, together with
@@ -48,7 +46,7 @@ import com.netflix.discovery.util.StringCache;
 public class StringInterningAmazonInfoBuilder extends JsonDeserializer<AmazonInfo>{
 
     private static final Map<String, CacheScope> VALUE_INTERN_KEYS;
-    private static final CharBuffer BUF_METADATA = CharBuffer.wrap("metadata");
+    private static final char[] BUF_METADATA = "metadata".toCharArray();
 
     static {
         HashMap<String, CacheScope> keys = new HashMap<>();
@@ -56,7 +54,9 @@ public class StringInterningAmazonInfoBuilder extends JsonDeserializer<AmazonInf
         keys.put(MetaDataKey.amiId.getName(), CacheScope.GLOBAL_SCOPE);
         keys.put(MetaDataKey.availabilityZone.getName(), CacheScope.GLOBAL_SCOPE);
         keys.put(MetaDataKey.instanceType.getName(), CacheScope.GLOBAL_SCOPE);
-        keys.put(MetaDataKey.vpcId.getName(), CacheScope.APPLICATION_SCOPE);
+        keys.put(MetaDataKey.vpcId.getName(), CacheScope.GLOBAL_SCOPE);
+        keys.put(MetaDataKey.publicIpv4.getName(), CacheScope.APPLICATION_SCOPE);
+        keys.put(MetaDataKey.localHostname.getName(), CacheScope.APPLICATION_SCOPE);
         VALUE_INTERN_KEYS = keys;
     }
 
@@ -87,21 +87,20 @@ public class StringInterningAmazonInfoBuilder extends JsonDeserializer<AmazonInf
     @Override
     public AmazonInfo deserialize(JsonParser jp, DeserializationContext context)
             throws IOException {
-        HashMap<String,String> metadata = new HashMap<>();
+        Map<String,String> metadata = new CompactHashMap<>();
         DeserializerStringCache intern = DeserializerStringCache.from(context);        
         
         JsonToken jsonToken;
         while((jsonToken = jp.nextToken()) != JsonToken.END_OBJECT){
           jsonToken = jp.nextToken();
-          CharBuffer fieldName = CharBuffer.wrap(jp.getTextCharacters(), jp.getTextOffset(), jp.getTextLength());            
             
-            if (BUF_METADATA.equals(fieldName)) {
+            if (EnumLookup.equals(BUF_METADATA, jp.getTextCharacters(), jp.getTextOffset(), jp.getTextLength())) {
                 jsonToken = jp.nextToken();                
                 while((jsonToken = jp.nextToken()) != JsonToken.END_OBJECT) {
                     String metadataKey = intern.apply(jp, CacheScope.GLOBAL_SCOPE);
                     jp.nextToken();
                     CacheScope scope = VALUE_INTERN_KEYS.get(metadataKey);
-                    String metadataValue =  (scope != null) ? intern.apply(jp, scope) : jp.getValueAsString();                    
+                    String metadataValue =  (scope != null) ? intern.apply(jp, scope) : intern.apply(jp, CacheScope.APPLICATION_SCOPE);                    
                     metadata.put(metadataKey, metadataValue);
                 }
             }
