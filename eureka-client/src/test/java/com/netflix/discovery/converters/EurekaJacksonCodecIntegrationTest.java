@@ -24,7 +24,7 @@ import com.netflix.discovery.shared.Applications;
  * tests below are @Ignore'd.
  *
  */
-//@Ignore
+@Ignore
 public class EurekaJacksonCodecIntegrationTest {
     private static final int UNREASONABLE_TIMEOUT_MS = 500;
     private final EurekaJacksonCodec codec = new EurekaJacksonCodec("", "");
