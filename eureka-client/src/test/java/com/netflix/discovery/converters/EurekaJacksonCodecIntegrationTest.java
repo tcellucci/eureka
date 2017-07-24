@@ -12,7 +12,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.netflix.discovery.shared.Applications;
@@ -24,7 +23,7 @@ import com.netflix.discovery.shared.Applications;
  * tests below are @Ignore'd.
  *
  */
-@Ignore
+//@org.junit.Ignore
 public class EurekaJacksonCodecIntegrationTest {
     private static final int UNREASONABLE_TIMEOUT_MS = 500;
     private final EurekaJacksonCodec codec = new EurekaJacksonCodec("", "");

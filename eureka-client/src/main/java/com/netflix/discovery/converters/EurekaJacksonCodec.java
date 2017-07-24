@@ -602,7 +602,7 @@ public class EurekaJacksonCodec {
                         builder.setASGName(intern.apply(jp));
                         break;
                     case METADATA:
-                        Map<String, String> metadataMap = new CompactHashMap<>();
+                        Map<String, String> metadataMap = null;
                         while ((jsonToken = jp.nextToken()) != JsonToken.END_OBJECT) {
                             char[] parserChars = jp.getTextCharacters();
                             if (parserChars[0] == '@' && EnumLookup.equals(BUF_AT_CLASS, parserChars, jp.getTextOffset(), jp.getTextLength())) {
@@ -613,10 +613,11 @@ public class EurekaJacksonCodec {
                                 String key = intern.apply(jp, CacheScope.GLOBAL_SCOPE);
                                 jsonToken = jp.nextToken();
                                 String value = intern.apply(jp, CacheScope.APPLICATION_SCOPE );
+                                metadataMap = Optional.ofNullable(metadataMap).orElseGet(CompactHashMap::new);
                                 metadataMap.put(key, value);
                             }
                         };   
-                        builder.setMetadata(Collections.synchronizedMap(metadataMap));
+                        builder.setMetadata(metadataMap == null ? Collections.emptyMap() : Collections.synchronizedMap(metadataMap));
                         break;
                     default:                    
                         autoUnmarshalEligible(jp.getCurrentName(), jp.getValueAsString(), builder.getRawInstance());

@@ -21,13 +21,11 @@ import java.util.AbstractQueue;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -41,22 +39,19 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonRootName;
 import com.netflix.appinfo.InstanceInfo;
-import com.netflix.appinfo.InstanceInfo.ActionType;
 import com.netflix.appinfo.InstanceInfo.InstanceStatus;
 import com.netflix.discovery.EurekaClientConfig;
 import com.netflix.discovery.InstanceRegionChecker;
 import com.netflix.discovery.provider.Serializer;
 import com.thoughtworks.xstream.annotations.XStreamAlias;
 import com.thoughtworks.xstream.annotations.XStreamImplicit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * The class that wraps all the registry information returned by eureka server.
  *
  * <p>
  * Note that the registry information is fetched from eureka server as specified
- * in {@link EurekaClientConfig#getRegistryFetchIntervalSeconds()}.  Once the
+ * in {@link EurekaClientConfig#getRegistryFetchIntervalSeconds()}. Once the
  * information is fetched it is shuffled and also filtered for instances with
  * {@link InstanceStatus#UP} status as specified by the configuration
  * {@link EurekaClientConfig#shouldFilterOnlyUpInstances()}.
@@ -70,66 +65,54 @@ import org.slf4j.LoggerFactory;
 @JsonRootName("applications")
 public class Applications {
     private static class VipIndexSupport {
-        AbstractQueue<InstanceInfo> instances = new ConcurrentLinkedQueue<>();
-        AtomicLong roundRobinIndex = new AtomicLong(0);
-        AtomicReference<List<InstanceInfo>> vipList = new AtomicReference<List<InstanceInfo>>(Collections.emptyList());
-        public AbstractQueue<InstanceInfo> getInstances() {
-            return instances;
-        }
+        final AbstractQueue<InstanceInfo> instances = new ConcurrentLinkedQueue<>();
+        final AtomicLong roundRobinIndex = new AtomicLong(0);
+        final AtomicReference<List<InstanceInfo>> vipList = new AtomicReference<List<InstanceInfo>>(Collections.emptyList());
+
         public AtomicLong getRoundRobinIndex() {
             return roundRobinIndex;
         }
+
         public AtomicReference<List<InstanceInfo>> getVipList() {
             return vipList;
         }
     }
-    private static final String APP_INSTANCEID_DELIMITER = "$$";
-    private static final Logger logger = LoggerFactory.getLogger(Applications.class);
+
     private static final String STATUS_DELIMITER = "_";
 
-    private Long versionDelta = Long.valueOf(-1);
-
+    private String appsHashCode;
+    private Long versionDelta;
     @XStreamImplicit
     private final AbstractQueue<Application> applications;
-
-    private Map<String, Application> appNameApplicationMap = new ConcurrentHashMap<String, Application>();
-    private Map<String, VipIndexSupport> virtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
-    private Map<String, VipIndexSupport> secureVirtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
-
-    private String appsHashCode;
+    private final Map<String, Application> appNameApplicationMap;
+    private final Map<String, VipIndexSupport> virtualHostNameAppMap;
+    private final Map<String, VipIndexSupport> secureVirtualHostNameAppMap;
 
     /**
      * Create a new, empty Eureka application list.
      */
     public Applications() {
-        this.applications = new ConcurrentLinkedQueue<Application>();
+        this(null, -1L, Collections.emptyList());
     }
 
     /**
-     * Note that appsHashCode and versionDelta key names are formatted in a custom/configurable way.
+     * Note that appsHashCode and versionDelta key names are formatted in a
+     * custom/configurable way.
      */
     @JsonCreator
-    public Applications(
-            @JsonProperty("appsHashCode") String appsHashCode,
+    public Applications(@JsonProperty("appsHashCode") String appsHashCode,
             @JsonProperty("versionDelta") Long versionDelta,
             @JsonProperty("application") List<Application> registeredApplications) {
         this.applications = new ConcurrentLinkedQueue<Application>();
+        this.appNameApplicationMap = new ConcurrentHashMap<String, Application>();
+        this.virtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
+        this.secureVirtualHostNameAppMap = new ConcurrentHashMap<String, VipIndexSupport>();
+        this.appsHashCode = appsHashCode;
+        this.versionDelta = versionDelta;
+
         for (Application app : registeredApplications) {
             this.addApplication(app);
         }
-        this.appsHashCode = appsHashCode;
-        this.versionDelta = versionDelta;
-    }
-
-    /**
-     * Create a new Eureka application list, based on the provided applications.  The provided container is
-     * not modified.
-     *
-     * @param apps the initial list of apps to store in this applications list
-     */
-    public Applications(List<Application> apps) {
-        this.applications = new ConcurrentLinkedQueue<Application>();
-        this.applications.addAll(apps);
     }
 
     /**
@@ -143,7 +126,6 @@ public class Applications {
         addInstancesToVIPMaps(app, this.virtualHostNameAppMap, this.secureVirtualHostNameAppMap);
         applications.add(app);
     }
-
 
     /**
      * Gets the list of all registered <em>applications</em> from eureka.
@@ -177,13 +159,10 @@ public class Applications {
      * @return list of <em>instances</em>.
      */
     public List<InstanceInfo> getInstancesByVirtualHostName(String virtualHostName) {
-        VipIndexSupport ref = this.virtualHostNameAppMap
-                .get(virtualHostName.toUpperCase(Locale.ROOT));
-        if (ref == null || ref.vipList.get() == null) {
-            return new ArrayList<InstanceInfo>();
-        } else {
-            return ref.vipList.get();
-        }
+        return Optional.ofNullable(this.virtualHostNameAppMap.get(virtualHostName.toUpperCase(Locale.ROOT)))
+            .map(VipIndexSupport::getVipList)
+            .map(AtomicReference::get)
+            .orElseGet(Collections::emptyList); 
     }
 
     /**
@@ -196,25 +175,18 @@ public class Applications {
      * @return list of <em>instances</em>.
      */
     public List<InstanceInfo> getInstancesBySecureVirtualHostName(String secureVirtualHostName) {
-        VipIndexSupport ref = this.secureVirtualHostNameAppMap
-                .get(secureVirtualHostName.toUpperCase(Locale.ROOT));
-        if (ref == null || ref.vipList.get() == null) {
-            return new ArrayList<InstanceInfo>();
-        } else {
-            return ref.vipList.get();
-        }
+        return Optional.ofNullable(this.secureVirtualHostNameAppMap.get(secureVirtualHostName.toUpperCase(Locale.ROOT)))
+                .map(VipIndexSupport::getVipList)
+                .map(AtomicReference::get)
+                .orElseGet(Collections::emptyList);        
     }
 
     /**
-     * @return a weakly consistent size of the number of instances in all the applications
+     * @return a weakly consistent size of the number of instances in all the
+     *         applications
      */
     public int size() {
-        int result = 0;
-        for (Application application : applications) {
-            result += application.size();
-        }
-
-        return result;
+        return applications.stream().mapToInt(Application::size).sum();
     }
 
     @Deprecated
@@ -231,7 +203,8 @@ public class Applications {
     /**
      * Used by the eureka server. Not for external use.
      *
-     * @param hashCode the hash code to assign for this app collection
+     * @param hashCode
+     *            the hash code to assign for this app collection
      */
     public void setAppsHashCode(String hashCode) {
         this.appsHashCode = hashCode;
@@ -239,7 +212,9 @@ public class Applications {
 
     /**
      * Used by the eureka server. Not for external use.
-     * @return the string indicating the hashcode based on the applications stored.
+     * 
+     * @return the string indicating the hashcode based on the applications
+     *         stored.
      *
      */
     @JsonIgnore // Handled directly due to legacy name formatting
@@ -262,184 +237,74 @@ public class Applications {
     }
 
     /**
-     * Populates the provided instance count map.  The instance count map is used as part of the general
-     * app list synchronization mechanism.
-     * @param instanceCountMap the map to populate
+     * Populates the provided instance count map. The instance count map is used
+     * as part of the general app list synchronization mechanism.
+     * 
+     * @param instanceCountMap
+     *            the map to populate
      */
-    public void populateInstanceCountMap(TreeMap<String, AtomicInteger> instanceCountMap) {
+    public void populateInstanceCountMap(Map<String, AtomicInteger> instanceCountMap) {
         for (Application app : this.getRegisteredApplications()) {
             for (InstanceInfo info : app.getInstancesAsIsFromEureka()) {
-                AtomicInteger instanceCount = instanceCountMap.computeIfAbsent(info.getStatus().name(), k->new AtomicInteger(0));
+                AtomicInteger instanceCount = instanceCountMap.computeIfAbsent(info.getStatus().name(),
+                        k -> new AtomicInteger(0));
                 instanceCount.incrementAndGet();
             }
         }
     }
 
     /**
-     * Gets the reconciliation hashcode.  The hashcode is used to determine whether the applications list
-     * has changed since the last time it was acquired.
-     * @param instanceCountMap the instance count map to use for generating the hash
+     * Gets the reconciliation hashcode. The hashcode is used to determine
+     * whether the applications list has changed since the last time it was
+     * acquired.
+     * 
+     * @param instanceCountMap
+     *            the instance count map to use for generating the hash
      * @return the hash code for this instance
      */
-    public static String getReconcileHashCode(TreeMap<String, AtomicInteger> instanceCountMap) {
-        StringBuilder reconcileHashCode = new StringBuilder(17 * instanceCountMap.size() );
+    public static String getReconcileHashCode(Map<String, AtomicInteger> instanceCountMap) {
+        StringBuilder reconcileHashCode = new StringBuilder(75);
         for (Map.Entry<String, AtomicInteger> mapEntry : instanceCountMap.entrySet()) {
-            reconcileHashCode.append(mapEntry.getKey()).append(STATUS_DELIMITER).append( mapEntry.getValue().get()).append(STATUS_DELIMITER);
+            reconcileHashCode.append(mapEntry.getKey()).append(STATUS_DELIMITER).append(mapEntry.getValue().get())
+                    .append(STATUS_DELIMITER);
         }
         return reconcileHashCode.toString();
     }
 
     /**
-     * Gets the exact difference between this applications instance and another
-     * one.
-     *
-     * @param apps
-     *            the applications for which to compare this one.
-     * @return a map containing the differences between the two.
-     */
-    public Map<String, List<String>> getReconcileMapDiff(Applications apps) {
-        Map<String, List<String>> diffMap = new TreeMap<String, List<String>>();
-        Set<Pair> allInstanceAppInstanceIds = new HashSet<Pair>();
-        for (Application otherApp : apps.getRegisteredApplications()) {
-            Application thisApp = this.getRegisteredApplications(otherApp.getName());
-            if (thisApp == null) {
-                logger.warn("Application not found in local cache : {}", otherApp.getName());
-                continue;
-            }
-            for (InstanceInfo instanceInfo : thisApp.getInstancesAsIsFromEureka()) {
-                allInstanceAppInstanceIds.add(new Pair(thisApp.getName(),
-                        instanceInfo.getId()));
-            }
-            for (InstanceInfo otherInstanceInfo : otherApp.getInstancesAsIsFromEureka()) {
-                InstanceInfo thisInstanceInfo = thisApp.getByInstanceId(otherInstanceInfo.getId());
-                if (thisInstanceInfo == null) {
-                    List<String> diffList = diffMap.get(ActionType.DELETED.name());
-                    if (diffList == null) {
-                        diffList = new ArrayList<String>();
-                        diffMap.put(ActionType.DELETED.name(), diffList);
-                    }
-                    diffList.add(otherInstanceInfo.getId());
-                } else if (thisInstanceInfo.getStatus() != otherInstanceInfo.getStatus()) {
-                    List<String> diffList = diffMap.get(ActionType.MODIFIED.name());
-                    if (diffList == null) {
-                        diffList = new ArrayList<String>();
-                        diffMap.put(ActionType.MODIFIED.name(), diffList);
-                    }
-                    diffList.add(thisInstanceInfo.getId()
-                            + APP_INSTANCEID_DELIMITER
-                            + thisInstanceInfo.getStatus().name()
-                            + APP_INSTANCEID_DELIMITER
-                            + otherInstanceInfo.getStatus().name());
-                }
-                allInstanceAppInstanceIds.remove(new Pair(otherApp.getName(), otherInstanceInfo.getId()));
-            }
-        }
-        for (Pair pair : allInstanceAppInstanceIds) {
-            Application app = new Application(pair.getItem1());
-            InstanceInfo thisInstanceInfo = app.getByInstanceId(pair.getItem2());
-            if (thisInstanceInfo != null) {
-                List<String> diffList = diffMap.get(ActionType.ADDED.name());
-                if (diffList == null) {
-                    diffList = new ArrayList<String>();
-                    diffMap.put(ActionType.ADDED.name(), diffList);
-                }
-                diffList.add(thisInstanceInfo.getId());
-            }
-        }
-        return diffMap;
-
-    }
-
-    private static final class Pair {
-        private final String item1;
-        private final String item2;
-        private final int hashCode;
-
-        public Pair(String item1, String item2) {
-            super();
-            this.item1 = item1;
-            this.item2 = item2;
-            this.hashCode = computeHashCode();
-        }
-
-        @Override
-        public int hashCode() {
-            return hashCode;
-        }
-        
-        private int computeHashCode() {
-            final int prime = 31;
-            int result = 1;
-            result = prime * result
-                    + ((item1 == null) ? 0 : item1.hashCode());
-            result = prime * result
-                    + ((item2 == null) ? 0 : item2.hashCode());
-            return result;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) {
-                return true;
-            }
-            if (obj == null) {
-                return false;
-            }
-            if (getClass() != obj.getClass()) {
-                return false;
-            }
-            Pair other = (Pair) obj;
-            if (item1 == null) {
-                if (other.item1 != null) {
-                    return false;
-                }
-            } else if (!item1.equals(other.item1)) {
-                return false;
-            }
-            if (item2 == null) {
-                if (other.item2 != null) {
-                    return false;
-                }
-            } else if (!item2.equals(other.item2)) {
-                return false;
-            }
-            return true;
-        }
-
-        public String getItem1() {
-            return item1;
-        }
-
-        public String getItem2() {
-            return item2;
-        }
-    }
-
-    /**
-     * Shuffles the provided instances so that they will not always be returned in the same order.
-     * @param filterUpInstances whether to return only UP instances
+     * Shuffles the provided instances so that they will not always be returned
+     * in the same order.
+     * 
+     * @param filterUpInstances
+     *            whether to return only UP instances
      */
     public void shuffleInstances(boolean filterUpInstances) {
         shuffleInstances(filterUpInstances, false, null, null, null);
     }
 
     /**
-     * Shuffles a whole region so that the instances will not always be returned in the same order.
-     * @param remoteRegionsRegistry the map of remote region names to their registries
-     * @param clientConfig the {@link EurekaClientConfig}, whose settings will be used to determine whether to
-     *                     filter to only UP instances
-     * @param instanceRegionChecker the instance region checker
+     * Shuffles a whole region so that the instances will not always be returned
+     * in the same order.
+     * 
+     * @param remoteRegionsRegistry
+     *            the map of remote region names to their registries
+     * @param clientConfig
+     *            the {@link EurekaClientConfig}, whose settings will be used to
+     *            determine whether to filter to only UP instances
+     * @param instanceRegionChecker
+     *            the instance region checker
      */
     public void shuffleAndIndexInstances(Map<String, Applications> remoteRegionsRegistry,
-                                         EurekaClientConfig clientConfig, InstanceRegionChecker instanceRegionChecker) {
+            EurekaClientConfig clientConfig, InstanceRegionChecker instanceRegionChecker) {
         shuffleInstances(clientConfig.shouldFilterOnlyUpInstances(), true, remoteRegionsRegistry, clientConfig,
                 instanceRegionChecker);
     }
 
-    private void shuffleInstances(boolean filterUpInstances, boolean indexByRemoteRegions,
-                                  @Nullable Map<String, Applications> remoteRegionsRegistry,
-                                  @Nullable EurekaClientConfig clientConfig,
-                                  @Nullable InstanceRegionChecker instanceRegionChecker) {
+    private void shuffleInstances(boolean filterUpInstances, 
+            boolean indexByRemoteRegions,
+            @Nullable Map<String, Applications> remoteRegionsRegistry, 
+            @Nullable EurekaClientConfig clientConfig,
+            @Nullable InstanceRegionChecker instanceRegionChecker) {
         Map<String, VipIndexSupport> secureVirtualHostNameAppMap = new HashMap<>();
         Map<String, VipIndexSupport> virtualHostNameAppMap = new HashMap<>();
         for (Application application : appNameApplicationMap.values()) {
@@ -452,10 +317,10 @@ public class Applications {
         }
         shuffleAndFilterInstances(virtualHostNameAppMap, filterUpInstances);
         shuffleAndFilterInstances(secureVirtualHostNameAppMap, filterUpInstances);
-        
+
         this.virtualHostNameAppMap.putAll(virtualHostNameAppMap);
         this.virtualHostNameAppMap.keySet().retainAll(virtualHostNameAppMap.keySet());
-        this.secureVirtualHostNameAppMap.putAll(virtualHostNameAppMap);
+        this.secureVirtualHostNameAppMap.putAll(secureVirtualHostNameAppMap);
         this.secureVirtualHostNameAppMap.keySet().retainAll(secureVirtualHostNameAppMap.keySet());
     }
 
@@ -471,11 +336,10 @@ public class Applications {
      * @return AtomicLong value representing the next round-robin index.
      */
     public AtomicLong getNextIndex(String virtualHostname, boolean secure) {
-        if (secure) {
-            return Optional.ofNullable(this.secureVirtualHostNameAppMap.get(virtualHostname)).map(VipIndexSupport::getRoundRobinIndex).orElse(null);
-        } else {
-            return Optional.ofNullable(this.virtualHostNameAppMap.get(virtualHostname)).map(VipIndexSupport::getRoundRobinIndex).orElse(null);
-        }
+        Map<String, VipIndexSupport> index = (secure) ? secureVirtualHostNameAppMap : virtualHostNameAppMap;
+        return Optional.ofNullable(index.get(virtualHostname.toUpperCase(Locale.ROOT)))
+                .map(VipIndexSupport::getRoundRobinIndex)
+                .orElse(null);
     }
 
     /**
@@ -483,24 +347,21 @@ public class Applications {
      * required.
      *
      */
-    private void shuffleAndFilterInstances(
-            Map<String, VipIndexSupport> srcMap, boolean filterUpInstances) {
-        
+    private void shuffleAndFilterInstances(Map<String, VipIndexSupport> srcMap, boolean filterUpInstances) {
+
         Random shuffleRandom = new Random();
         for (Map.Entry<String, VipIndexSupport> entries : srcMap.entrySet()) {
             VipIndexSupport vipIndexSupport = entries.getValue();
-            AbstractQueue<InstanceInfo> vipInstances = vipIndexSupport.instances;            
-            final List<InstanceInfo> l;
+            AbstractQueue<InstanceInfo> vipInstances = vipIndexSupport.instances;
+            final List<InstanceInfo> filteredInstances;
             if (filterUpInstances) {
-               l = vipInstances.stream()
-                       .filter(ii -> ii.getStatus() == InstanceStatus.UP)
-                       .collect(Collectors.toCollection(()->new ArrayList<>(vipInstances.size())));
+                filteredInstances = vipInstances.stream().filter(ii -> ii.getStatus() == InstanceStatus.UP)
+                        .collect(Collectors.toCollection(() -> new ArrayList<>(vipInstances.size())));
+            } else {
+                filteredInstances = new ArrayList<InstanceInfo>(vipInstances);
             }
-            else {
-               l = new ArrayList<InstanceInfo>(vipInstances);
-            }            
-            Collections.shuffle(l, shuffleRandom);            
-            vipIndexSupport.vipList.set(l);
+            Collections.shuffle(filteredInstances, shuffleRandom);
+            vipIndexSupport.vipList.set(filteredInstances);
             vipIndexSupport.roundRobinIndex.set(0);
         }
     }
@@ -511,12 +372,11 @@ public class Applications {
      * addresses.
      *
      */
-    private void addInstanceToMap(InstanceInfo info, String vipAddresses,
-                                  Map<String, VipIndexSupport> vipMap) {
+    private void addInstanceToMap(InstanceInfo info, String vipAddresses, Map<String, VipIndexSupport> vipMap) {
         if (vipAddresses != null) {
             String[] vipAddressArray = vipAddresses.toUpperCase(Locale.ROOT).split(",");
             for (String vipAddress : vipAddressArray) {
-                VipIndexSupport vis = vipMap.computeIfAbsent(vipAddress, k->new VipIndexSupport());
+                VipIndexSupport vis = vipMap.computeIfAbsent(vipAddress, k -> new VipIndexSupport());
                 vis.instances.add(info);
             }
         }
@@ -524,20 +384,24 @@ public class Applications {
 
     /**
      * Adds the instances to the internal vip address map.
-     * @param app - the applications for which the instances need to be added.
+     * 
+     * @param app
+     *            - the applications for which the instances need to be added.
      */
-    private void addInstancesToVIPMaps(Application app, Map<String, VipIndexSupport> virtualHostNameAppMap,  Map<String, VipIndexSupport> secureVirtualHostNameAppMap) {
+    private void addInstancesToVIPMaps(Application app, Map<String, VipIndexSupport> virtualHostNameAppMap,
+            Map<String, VipIndexSupport> secureVirtualHostNameAppMap) {
         // Check and add the instances to the their respective virtual host name
         // mappings
         for (InstanceInfo info : app.getInstances()) {
             String vipAddresses = info.getVIPAddress();
-            String secureVipAddresses = info.getSecureVipAddress();
-            if ((vipAddresses == null) && (secureVipAddresses == null)) {
-                continue;
+            if (vipAddresses != null) {
+                addInstanceToMap(info, vipAddresses, virtualHostNameAppMap);
             }
-            addInstanceToMap(info, vipAddresses, virtualHostNameAppMap);
-            addInstanceToMap(info, secureVipAddresses, secureVirtualHostNameAppMap);
+
+            String secureVipAddresses = info.getSecureVipAddress();
+            if (secureVipAddresses != null) {
+                addInstanceToMap(info, secureVipAddresses, secureVirtualHostNameAppMap);
+            }
         }
     }
-
 }
