@@ -252,9 +252,15 @@ public class AmazonInfo implements DataCenterInfo, UniqueIdentifier {
     @JsonCreator
     public AmazonInfo(
             @JsonProperty("name") String name,
-            @JsonProperty("metadata") Map<String, String> metadata) {
+            @JsonProperty("metadata") HashMap<String, String> metadata) {
         this.metadata = metadata;
     }
+    
+    public AmazonInfo(
+            @JsonProperty("name") String name,
+            @JsonProperty("metadata") Map<String, String> metadata) {
+        this.metadata = metadata;
+    }    
 
     @Override
     public Name getName() {
