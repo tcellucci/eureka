@@ -236,11 +236,10 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
     @Override
     public void openForTraffic(ApplicationInfoManager applicationInfoManager, int count) {
         // Renewals happen every 30 seconds and for a minute it should be a factor of 2.
-        this.expectedNumberOfRenewsPerMin = count * 2;
-        this.numberOfRenewsPerMinThreshold =
-                (int) (this.expectedNumberOfRenewsPerMin * serverConfig.getRenewalPercentThreshold());
-        logger.info("Got " + count + " instances from neighboring DS node");
-        logger.info("Renew threshold is: " + numberOfRenewsPerMinThreshold);
+        this.expectedNumberOfClientsSendingRenews = count;
+        updateRenewsPerMinThreshold();
+        logger.info("Got {} instances from neighboring DS node", count);
+        logger.info("Renew threshold is: {}", numberOfRenewsPerMinThreshold);
         this.startupTime = System.currentTimeMillis();
         if (count > 0) {
             this.peerInstancesTransferEmptyOnStartup = false;
@@ -311,7 +310,7 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
                 }
                 areAllPeerNodesPrimed = true;
             } catch (Throwable e) {
-                logger.error("Could not contact " + peerHostName, e);
+                logger.error("Could not contact {}", peerHostName, e);
                 try {
                     Thread.sleep(PRIME_PEER_NODES_RETRY_MS);
                 } catch (InterruptedException e1) {
@@ -378,11 +377,10 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
         if (super.cancel(appName, id, isReplication)) {
             replicateToPeers(Action.Cancel, appName, id, null, null, isReplication);
             synchronized (lock) {
-                if (this.expectedNumberOfRenewsPerMin > 0) {
-                    // Since the client wants to cancel it, reduce the threshold (1 for 30 seconds, 2 for a minute)
-                    this.expectedNumberOfRenewsPerMin = this.expectedNumberOfRenewsPerMin - 2;
-                    this.numberOfRenewsPerMinThreshold =
-                            (int) (this.expectedNumberOfRenewsPerMin * serverConfig.getRenewalPercentThreshold());
+                if (this.expectedNumberOfClientsSendingRenews > 0) {
+                    // Since the client wants to cancel it, reduce the number of clients to send renews
+                    this.expectedNumberOfClientsSendingRenews = this.expectedNumberOfClientsSendingRenews - 1;
+                    updateRenewsPerMinThreshold();
                 }
             }
             return true;
@@ -531,11 +529,11 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
             }
             synchronized (lock) {
                 // Update threshold only if the threshold is greater than the
-                // current expected threshold of if the self preservation is disabled.
-                if ((count * 2) > (serverConfig.getRenewalPercentThreshold() * numberOfRenewsPerMinThreshold)
+                // current expected threshold or if self preservation is disabled.
+                if ((count) > (serverConfig.getRenewalPercentThreshold() * expectedNumberOfClientsSendingRenews)
                         || (!this.isSelfPreservationModeEnabled())) {
-                    this.expectedNumberOfRenewsPerMin = count * 2;
-                    this.numberOfRenewsPerMinThreshold = (int) ((count * 2) * serverConfig.getRenewalPercentThreshold());
+                    this.expectedNumberOfClientsSendingRenews = count;
+                    updateRenewsPerMinThreshold();
                 }
             }
             logger.info("Current renewal threshold is : {}", numberOfRenewsPerMinThreshold);
